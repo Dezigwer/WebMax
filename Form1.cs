@@ -23,6 +23,9 @@ namespace WebMax
         private Button? homeButton = null!;
         private NotifyIcon? trayIcon = null!;
         private ContextMenuStrip? trayMenu = null!;
+        
+        // ДОБАВЛЕНО: поле для хранения файла, если WebView ещё не инициализирован
+        private string? pendingFile = null;
 
         [DllImport("user32.dll")]
         private static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
@@ -64,42 +67,42 @@ namespace WebMax
             catch { }
         }
 
-private void CreateTrayIcon()
-{
-    trayMenu = new ContextMenuStrip();
-    
-    var showItem = new ToolStripMenuItem("Открыть WebMax");
-    showItem.Click += (s, e) => ShowFromTray();
-    showItem.Font = new Font("Segoe UI", 9, FontStyle.Bold);
-    
-    var separator = new ToolStripSeparator();
-    
-    var exitItem = new ToolStripMenuItem("Закрыть");
-    exitItem.Click += (s, e) => ExitApplication();
-    
-    trayMenu.Items.Add(showItem);
-    trayMenu.Items.Add(separator);
-    trayMenu.Items.Add(exitItem);
-
-    trayIcon = new NotifyIcon
-    {
-        Text = "WebMax",
-        ContextMenuStrip = trayMenu,
-        Visible = false
-    };
-
-    try
-    {
-        using var stream = GetEmbeddedResource("ico.ico");
-        if (stream != null)
+        private void CreateTrayIcon()
         {
-            trayIcon.Icon = new Icon(stream);
-        }
-    }
-    catch { }
+            trayMenu = new ContextMenuStrip();
+            
+            var showItem = new ToolStripMenuItem("Открыть WebMax");
+            showItem.Click += (s, e) => ShowFromTray();
+            showItem.Font = new Font("Segoe UI", 9, FontStyle.Bold);
+            
+            var separator = new ToolStripSeparator();
+            
+            var exitItem = new ToolStripMenuItem("Закрыть");
+            exitItem.Click += (s, e) => ExitApplication();
+            
+            trayMenu.Items.Add(showItem);
+            trayMenu.Items.Add(separator);
+            trayMenu.Items.Add(exitItem);
 
-    trayIcon.DoubleClick += (s, e) => ShowFromTray();
-}
+            trayIcon = new NotifyIcon
+            {
+                Text = "WebMax",
+                ContextMenuStrip = trayMenu,
+                Visible = false
+            };
+
+            try
+            {
+                using var stream = GetEmbeddedResource("ico.ico");
+                if (stream != null)
+                {
+                    trayIcon.Icon = new Icon(stream);
+                }
+            }
+            catch { }
+
+            trayIcon.DoubleClick += (s, e) => ShowFromTray();
+        }
 
         private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
         {
@@ -326,6 +329,13 @@ private void CreateTrayIcon()
                             titleLabel.Text = webView.CoreWebView2.DocumentTitle ?? "WebMax";
                     }));
                 };
+                
+                // ДОБАВЛЕНО: если есть файл в очереди - открываем его
+                if (!string.IsNullOrEmpty(pendingFile))
+                {
+                    OpenFileInWebView(pendingFile);
+                    pendingFile = null;
+                }
             }
             catch (Exception ex)
             {
@@ -342,6 +352,64 @@ private void CreateTrayIcon()
                 minimizeButton.Location = new Point(this.Width - 80, 10);
                 closeButton.Location = new Point(this.Width - 45, 10);
             }
+        }
+
+        // ============= ДОБАВЛЕННЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С ФАЙЛАМИ =============
+
+        /// <summary>
+        /// Публичный метод для передачи файла из Program.cs
+        /// </summary>
+        public void SetFileToOpen(string filePath)
+        {
+            pendingFile = filePath;
+            
+            // Если WebView уже загружен - открываем файл сразу
+            if (webView?.CoreWebView2 != null && pendingFile != null)
+            {
+                OpenFileInWebView(pendingFile);
+                pendingFile = null;
+            }
+        }
+
+        /// <summary>
+        /// Переопределение обработки сообщений Windows (для приёма файлов из другого процесса)
+        /// </summary>
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_USER_OPEN_FILE = 0x0400 + 100;
+            
+            if (m.Msg == WM_USER_OPEN_FILE)
+            {
+                string? filePath = m.LParam.ToString();
+                if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+                {
+                    OpenFileInWebView(filePath);
+                }
+                return;
+            }
+            
+            base.WndProc(ref m);
+        }
+
+        /// <summary>
+        /// Метод для открытия файла в WebView2
+        /// </summary>
+        private void OpenFileInWebView(string filePath)
+        {
+            // Показываем окно из трея (разворачиваем)
+            ShowFromTray();
+            
+            // Преобразуем путь в URL и открываем
+            string url = new Uri(filePath).AbsoluteUri;
+            
+            // Ждём, пока WebView2 инициализируется, если ещё не готов
+            if (webView?.CoreWebView2 == null)
+            {
+                pendingFile = filePath;
+                return;
+            }
+            
+            webView.CoreWebView2.Navigate(url);
         }
     }
 }
